@@ -1,0 +1,33 @@
+server:
+  port: 8080
+
+loadbalancer:
+  strategy: ROUND_ROBIN
+  backends:
+    - id: backend-1
+      host: localhost
+      port: 9001
+      weight: 3
+    - id: backend-2
+      host: localhost
+      port: 9002
+      weight: 2
+    - id: backend-3
+      host: localhost
+      port: 9003
+      weight: 1
+
+healthcheck:
+  interval-ms: 5000
+
+management:
+  server:
+    port: 8081
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+
+logging:
+  level:
+    com.shivendra: DEBUG
