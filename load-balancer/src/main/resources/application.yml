@@ -31,3 +31,13 @@ management:
 logging:
   level:
     com.shivendra: DEBUG
+
+spring:
+  webflux:
+    base-path: /
+  jackson:
+    deserialization:
+      fail-on-unknown-properties: false
+
+  codec:
+    max-in-memory-size: 1MB

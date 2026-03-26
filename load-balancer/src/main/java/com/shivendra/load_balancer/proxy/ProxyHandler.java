@@ -1,5 +1,6 @@
 package com.shivendra.load_balancer.proxy;
 
+import com.shivendra.load_balancer.health.HealthChecker;
 import com.shivendra.load_balancer.model.BackendServer;
 import com.shivendra.load_balancer.registry.BackendRegistry;
 import com.shivendra.load_balancer.strategy.LoadBalancingStrategy;
@@ -32,6 +33,8 @@ public class ProxyHandler {
      */
     private volatile LoadBalancingStrategy strategy;
 
+    private final HealthChecker healthChecker;
+
     /**
      * Single shared WebClient for all proxy requests.
      * WebClient is thread-safe and designed to be shared — do not create per request.
@@ -41,9 +44,10 @@ public class ProxyHandler {
      */
     private final WebClient webClient;
 
-    public ProxyHandler(BackendRegistry registry, LoadBalancingStrategy strategy) {
+    public ProxyHandler(BackendRegistry registry, LoadBalancingStrategy strategy, HealthChecker healthChecker) {
         this.registry = registry;
         this.strategy = strategy;
+        this.healthChecker = healthChecker;
 
         HttpClient httpClient = HttpClient.create()
                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 3000)
@@ -88,11 +92,19 @@ public class ProxyHandler {
                 .uri(URI.create(targetUrl))
                 .headers(h -> h.addAll(request.headers().asHttpHeaders()))
                 .body(request.bodyToMono(byte[].class), byte[].class)
-                .exchangeToMono(response ->
-                        ServerResponse.status(response.statusCode())
-                                .headers(h -> h.addAll(response.headers().asHttpHeaders()))
-                                .body(response.bodyToMono(byte[].class), byte[].class)
-                )
+                .exchangeToMono(response -> {
+                    // Track 5xx responses toward health failure threshold
+                    if (response.statusCode().is5xxServerError()) {
+                        healthChecker.recordFailure(backend);
+                        log.warn("Backend {} returned 5xx: {}",
+                                backend.getId(), response.statusCode());
+                    } else {
+                        healthChecker.recordSuccess(backend);
+                    }
+                    return ServerResponse.status(response.statusCode())
+                            .headers(h -> h.addAll(response.headers().asHttpHeaders()))
+                            .body(response.bodyToMono(byte[].class), byte[].class);
+                })
                 /**
                  * doFinally fires on THREE signals: onComplete, onError, onCancel.
                  * This is the guarantee that activeConnections never drifts.
@@ -108,6 +120,7 @@ public class ProxyHandler {
                 .onErrorResume(TimeoutException.class, e -> {
                     log.error("Timeout waiting for backend {}", backend.getId());
                     backend.incrementFailures();
+                    healthChecker.recordFailure(backend);
                     return ServerResponse.status(HttpStatus.GATEWAY_TIMEOUT)
                             .bodyValue("Backend timeout");
                 })
@@ -115,6 +128,7 @@ public class ProxyHandler {
                     log.error("Connection reset from backend {}: {}",
                             backend.getId(), e.getMessage());
                     backend.incrementFailures();
+                    healthChecker.recordFailure(backend);
                     return ServerResponse.status(HttpStatus.BAD_GATEWAY)
                             .bodyValue("Backend connection reset");
                 })
@@ -122,6 +136,7 @@ public class ProxyHandler {
                     log.error("Unexpected error forwarding to backend {}: {}",
                             backend.getId(), e.getMessage());
                     backend.incrementFailures();
+                    healthChecker.recordFailure(backend);
                     return ServerResponse.status(HttpStatus.BAD_GATEWAY)
                             .bodyValue("Backend error");
                 });

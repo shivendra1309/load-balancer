@@ -54,21 +54,32 @@ public class HealthChecker {
     private Mono<Void> check(BackendServer backend) {
         return webClient.get()
                 .uri(backend.getUrl() + "/health")
-                .exchangeToMono(response -> {
-                    // Any response means TCP connection succeeded and backend is alive
-                    // Only 5xx means the backend itself is broken
-                    if (response.statusCode().is5xxServerError()) {
-                        return Mono.<Void>error(new RuntimeException(
-                                "Backend returned " + response.statusCode()));
-                    }
-                    return response.releaseBody(); // discard body, we don't need it
-                })
+                .retrieve()
+                .toBodilessEntity()
                 .timeout(Duration.ofMillis(TIMEOUT_MS))
                 .doOnSuccess(v -> onSuccess(backend))
                 .doOnError(err -> onFailure(backend, err))
                 .onErrorComplete()
                 .then();
     }
+
+    /**
+     * Called by ProxyHandler when a backend returns 5xx on real traffic.
+     * This means the backend is alive but sick — still counts toward
+     * failure threshold and can trigger marking DOWN.
+     */
+    public void recordFailure(BackendServer backend) {
+        onFailure(backend, new RuntimeException("5xx response from backend"));
+    }
+
+    /**
+     * Called by ProxyHandler when a backend returns 2xx on real traffic.
+     * Resets failure count — backend is healthy.
+     */
+    public void recordSuccess(BackendServer backend) {
+        onSuccess(backend);
+    }
+
 
     private void onSuccess(BackendServer backend) {
         failureCounts.put(backend.getId(), 0);

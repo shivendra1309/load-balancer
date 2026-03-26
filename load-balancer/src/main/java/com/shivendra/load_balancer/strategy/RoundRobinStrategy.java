@@ -1,11 +1,13 @@
 package com.shivendra.load_balancer.strategy;
 
 import com.shivendra.load_balancer.model.BackendServer;
+import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
 import java.util.concurrent.atomic.AtomicInteger;
 
+@Primary
 @Component
 public class RoundRobinStrategy implements LoadBalancingStrategy{
 
